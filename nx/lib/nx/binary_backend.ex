@@ -1071,8 +1071,8 @@ defmodule Nx.BinaryBackend do
 
   @impl true
   def qr(
-        {%{shape: {m, k}, type: output_type} = q_holder,
-         %{shape: {k, n}, type: output_type} = r_holder},
+        {%{shape: q_shape, type: output_type} = q_holder,
+         %{shape: {k, n} = r_shape, type: output_type} = r_holder},
         %{type: {_, input_num_bits} = input_type, shape: input_shape} = tensor,
         opts
       ) do
@@ -1092,27 +1092,7 @@ defmodule Nx.BinaryBackend do
         tensor |> to_binary() |> binary_to_matrix(input_type, input_shape)
       end
 
-    {q_matrix, r_matrix} =
-      for i <- 0..(n - 1), reduce: {nil, r_matrix} do
-        {q, r} ->
-          # a = r[[i..(k - 1), i]]
-          a = r |> Enum.slice(i..(k - 1)) |> Enum.map(fn row -> Enum.at(row, i) end)
-
-          h = householder_reflector(a, k, eps)
-
-          # If we haven't allocated Q yet, let Q = H1
-          q =
-            if is_nil(q) do
-              zero_padding = 0 |> List.duplicate(k) |> List.duplicate(m - k)
-              h ++ zero_padding
-            else
-              dot_matrix(q, h)
-            end
-
-          r = dot_matrix(h, r)
-
-          {q, r}
-      end
+    {q_matrix, r_matrix} = qr_matrix(r_matrix, q_shape, r_shape, eps)
 
     q_bin = matrix_to_binary(q_matrix, output_type)
     r_bin = matrix_to_binary(r_matrix, output_type)
@@ -1121,6 +1101,29 @@ defmodule Nx.BinaryBackend do
     r = from_binary(r_holder, r_bin)
 
     {q, r}
+  end
+
+  defp qr_matrix(matrix, {m, k}, {k, n}, eps) do
+    for i <- 0..(n - 1), reduce: {nil, matrix} do
+      {q, r} ->
+        # a = r[[i..(k - 1), i]]
+        a = r |> Enum.slice(i..(k - 1)) |> Enum.map(fn row -> Enum.at(row, i) end)
+
+        h = householder_reflector(a, k, eps)
+
+        # If we haven't allocated Q yet, let Q = H1
+        q =
+          if is_nil(q) do
+            zero_padding = 0 |> List.duplicate(k) |> List.duplicate(m - k)
+            h ++ zero_padding
+          else
+            dot_matrix(q, h)
+          end
+
+        r = dot_matrix(h, r)
+
+        {q, r}
+    end
   end
 
   @impl true
@@ -1256,6 +1259,67 @@ defmodule Nx.BinaryBackend do
     u_bin = matrix_to_binary(u, u_type)
 
     {from_binary(p_holder, p_bin), from_binary(l_holder, l_bin), from_binary(u_holder, u_bin)}
+  end
+
+  @impl true
+  def eigen(
+        {%{type: output_type} = eig_vals_holder, %{type: output_type} = eig_vecs_holder},
+        %{type: input_type, shape: {n, n} = input_shape} = tensor,
+        _opts
+      ) do
+    # naive eigen decomposition through the iterative QR method
+    # [1] - http://cstl-csm.semo.edu/jwojdylo/MA345/Chapter6/qrmethod/qrmethod.pdf
+
+    a = tensor |> to_binary() |> binary_to_matrix(input_type, input_shape)
+
+    {eig_vals, eig_vecs} = eigen_matrix(a, input_shape, 100, {nil, 0})
+
+    eig_vals =
+      eig_vals
+      |> Enum.with_index()
+      |> Enum.map(fn {row, idx} ->
+        Enum.at(row, idx)
+      end)
+
+    eig_vals_bin = matrix_to_binary(eig_vals, output_type)
+    eig_vals_tensor = from_binary(eig_vals_holder, eig_vals_bin)
+
+    eig_vecs_bin = matrix_to_binary(eig_vecs, output_type)
+    eig_vecs_tensor = from_binary(eig_vecs_holder, eig_vecs_bin)
+
+    {eig_vals_tensor, eig_vecs_tensor}
+  end
+
+  defp eigen_matrix(a, {n, n} = shape, max_iters, {v, iter}) do
+    if iter > max_iters do
+      {a, v}
+    else
+      {q, _r} = qr_matrix(a, shape, shape, @default_eps)
+      a_next = q |> transpose_matrix() |> dot_matrix(a) |> dot_matrix(q)
+      v_next = if v, do: dot_matrix(v, q), else: q
+
+      if iter > 10 and is_upper_triangular?(a_next, @default_eps) do
+        {a_next, v_next}
+      else
+        eigen_matrix(a_next, shape, max_iters, {v_next, iter + 1})
+      end
+    end
+  end
+
+  defp is_upper_triangular?(matrix, eps) do
+    matrix
+    |> Enum.with_index()
+    |> Enum.all?(fn {row, row_idx} ->
+      row
+      |> Enum.with_index()
+      |> Enum.all?(fn
+        {entry, col_idx} when col_idx <= row_idx ->
+          entry <= eps
+
+        _ ->
+          true
+      end)
+    end)
   end
 
   defp lu_validate_and_pivot(a, n) do
@@ -1723,24 +1787,42 @@ defmodule Nx.BinaryBackend do
 
   @impl true
   def scatter_window_max(out, tensor, source, window_dimensions, opts, init_value) do
-    select_and_scatter(out, tensor, source, &Nx.greater_equal/2, window_dimensions, opts, init_value, &Nx.add/2)
+    select_and_scatter(
+      out,
+      tensor,
+      source,
+      &Nx.greater_equal/2,
+      window_dimensions,
+      opts,
+      init_value,
+      &Nx.add/2
+    )
   end
 
   @impl true
   def scatter_window_min(out, tensor, source, window_dimensions, opts, init_value) do
-    select_and_scatter(out, tensor, source, &Nx.less_equal/2, window_dimensions, opts, init_value, &Nx.add/2)
+    select_and_scatter(
+      out,
+      tensor,
+      source,
+      &Nx.less_equal/2,
+      window_dimensions,
+      opts,
+      init_value,
+      &Nx.add/2
+    )
   end
 
   defp select_and_scatter(
-        %{type: {_, output_size} = output_type, shape: output_shape} = out,
-        t,
-        source,
-        select_fn,
-        window_dimensions,
-        opts,
-        init_value,
-        scatter_fn
-      ) do
+         %{type: {_, output_size} = output_type, shape: output_shape} = out,
+         t,
+         source,
+         select_fn,
+         window_dimensions,
+         opts,
+         init_value,
+         scatter_fn
+       ) do
     padding = opts[:padding]
     strides = opts[:strides]
 

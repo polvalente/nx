@@ -969,7 +969,18 @@ defmodule Nx.Shape do
     do:
       raise(
         ArgumentError,
-        "tensor must have as many rows as columns, got shape: #{inspect(shape)}"
+        "tensor must have rank 2 with as many rows as columns, got shape: #{inspect(shape)}"
+      )
+
+  def eigen({n, n}) do
+    {{n}, {n, n}}
+  end
+
+  def eigen(shape),
+    do:
+      raise(
+        ArgumentError,
+        "tensor must have rank 2 with as many rows as columns, got shape: #{inspect(shape)}"
       )
 
   defp validate_concat_names!(names) do

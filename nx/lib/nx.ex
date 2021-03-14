@@ -8203,7 +8203,7 @@ defmodule Nx do
   ## Error cases
 
       iex> Nx.lu(Nx.tensor([[1, 1, 1, 1], [-1, 4, 4, -1], [4, -2, 2, 0]]))
-      ** (ArgumentError) tensor must have as many rows as columns, got shape: {3, 4}
+      ** (ArgumentError) tensor must have rank 2 with as many rows as columns, got shape: {3, 4}
   """
   @doc type: :linalg
   def lu(tensor, opts \\ []) do
@@ -8218,6 +8218,49 @@ defmodule Nx do
       {%{tensor | type: type, shape: p_shape, names: names},
        %{tensor | type: output_type, shape: l_shape, names: names},
        %{tensor | type: output_type, shape: u_shape, names: names}},
+      tensor,
+      opts
+    )
+  end
+
+  @doc """
+  Calculates the eigenvalues and eigenvectors of a square matrix.
+
+  See also `svd/2` for a generalization for rectangular matrices.
+
+  ## Options
+
+  ## Examples
+      iex> a = Nx.tensor([[1, 1, 1], [0, 2, 2], [0, 0, 4]])
+      iex> {eig_values, eig_vectors} = Nx.eigen(a)
+      iex> Nx.round(eig_values)
+      Nx.tensor([1.0, 2.0, 4.0])
+      iex> eig_vectors
+      Nx.tensor([
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0]
+      ])
+      iex> first_eig_vector = Nx.tensor([1.0, 0.0, 0.0])
+      iex> Nx.dot(a, first_eig_vector)
+      Nx.tensor([1.0, 0.0, 0.0])
+      iex> second_eig_vector = Nx.tensor([1.0, 1.0, 0.0])
+      iex> Nx.dot(a, second_eig_vector)
+      Nx.tensor([2.0, 2.0, 0.0])
+      iex> third_eig_vector = Nx.tensor([0.0, 0.624, -0.78])
+      iex> Nx.dot(a, third_eig_vector)
+      Nx.tensor([0.0, -0.624, 0.78])
+  """
+  def eigen(tensor, opts \\ []) do
+    %T{type: type, shape: shape} = tensor = tensor!(tensor)
+    assert_keys!(opts, [:eps])
+
+    output_type = Nx.Type.to_floating(type)
+    {eig_val_shape, eig_vec_shape} = Nx.Shape.eigen(shape)
+
+    impl!(tensor).eigen(
+      {%{tensor | type: output_type, shape: eig_val_shape, names: [nil]},
+       %{tensor | type: output_type, shape: eig_vec_shape, names: [nil, nil]}},
       tensor,
       opts
     )
