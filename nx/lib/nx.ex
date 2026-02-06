@@ -8658,6 +8658,67 @@ defmodule Nx do
     end
   end
 
+  @doc """
+  Calculates the round of each element in the tensor to the given number of
+  decimal digits.
+
+  If a non-floating tensor is given, it is returned as is.
+  If a floating tensor is given, then we apply the operation,
+  but keep its type.
+
+  ## Options
+
+    * `:decimals` - the number of decimal digits to round to. Defaults to `0`
+
+  ## Examples
+
+      iex> Nx.round(Nx.tensor([-1.26, -1.24, 1.24, 1.26], names: [:x]), decimals: 1)
+      #Nx.Tensor<
+        f32[x: 4]
+        [-1.3, -1.2, 1.2, 1.3]
+      >
+
+  """
+  @doc type: :element
+  def round(tensor, opts) when is_list(opts) do
+    opts = Keyword.validate!(opts, decimals: 0)
+    round(tensor, opts[:decimals])
+  end
+
+  def round(tensor, decimals) when is_integer(decimals) do
+    if decimals == 0 do
+      round(tensor)
+    else
+      apply_vectorized(tensor, fn tensor ->
+        case tensor do
+          %T{type: {type, _}} = tensor when type in [:s, :u] ->
+            tensor
+
+          %T{type: {:c, _}} ->
+            Nx.Shared.raise_complex_not_supported(:round, 1)
+
+          %T{} = tensor ->
+            scale = round_scale(tensor.type, decimals)
+
+            tensor
+            |> multiply(scale)
+            |> round()
+            |> divide(scale)
+        end
+      end)
+    end
+  end
+
+  def round(_tensor, decimals) do
+    raise ArgumentError,
+          "round expects :decimals to be an integer, got: #{inspect(decimals)}"
+  end
+
+  defp round_scale(type, decimals) do
+    scalar = :math.pow(10.0, decimals)
+    tensor(scalar, type: type)
+  end
+
   ## Aggregate ops
 
   @doc """
